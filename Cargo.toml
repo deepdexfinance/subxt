@@ -139,13 +139,13 @@ instant = { version = "0.1.13", default-features = false }
 tokio-util = "0.7.12"
 
 # Substrate crates:
-sp-core = { git = "https://github.com/boolnetwork/polkadot-sdk", branch = "Bool_Polkadot", default-features = false }
-sp-crypto-hashing = { package = "sp-core-hashing", git = "https://github.com/boolnetwork/polkadot-sdk", branch = "Bool_Polkadot", default-features = false }
-sp-runtime = { git = "https://github.com/boolnetwork/polkadot-sdk", branch = "Bool_Polkadot" }
-sp-keyring = { git = "https://github.com/boolnetwork/polkadot-sdk", branch = "Bool_Polkadot" }
-sp-maybe-compressed-blob = { git = "https://github.com/boolnetwork/polkadot-sdk", branch = "Bool_Polkadot" }
-sp-state-machine = { git = "https://github.com/boolnetwork/polkadot-sdk", branch = "Bool_Polkadot" }
-sp-io = { git = "https://github.com/boolnetwork/polkadot-sdk", branch = "Bool_Polkadot" }
+sp-core = { git = "https://github.com/deepdexfinance/polkadot-sdk-par", default-features = false }
+sp-crypto-hashing = { package = "sp-core-hashing", git = "https://github.com/deepdexfinance/polkadot-sdk-par", default-features = false }
+sp-runtime = { git = "https://github.com/deepdexfinance/polkadot-sdk-par" }
+sp-keyring = { git = "https://github.com/deepdexfinance/polkadot-sdk-par" }
+sp-maybe-compressed-blob = { git = "https://github.com/deepdexfinance/polkadot-sdk-par" }
+sp-state-machine = { git = "https://github.com/deepdexfinance/polkadot-sdk-par" }
+sp-io = { git = "https://github.com/deepdexfinance/polkadot-sdk-par" }
 
 # Subxt workspace crates:
 subxt = { version = "0.37.0", path = "subxt", default-features = false }
