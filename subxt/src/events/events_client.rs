@@ -7,6 +7,8 @@ use crate::{client::OnlineClientT, error::Error, events::Events, Config};
 use derive_where::derive_where;
 use polkadot_sdk::sp_crypto_hashing;
 use std::future::Future;
+use codec::Encode;
+use subxt_core::config::Header;
 
 /// A client for working with events.
 #[derive_where(Clone; Client)]
@@ -71,12 +73,16 @@ where
 }
 
 // The storage key needed to access events.
-fn system_events_key() -> [u8; 32] {
-    let a = sp_crypto_hashing::twox_128(b"System");
-    let b = sp_crypto_hashing::twox_128(b"Events");
-    let mut res = [0; 32];
-    res[0..16].clone_from_slice(&a);
-    res[16..32].clone_from_slice(&b);
+fn system_events_key(height: u32) -> Vec<u8> {
+    let mut a = sp_crypto_hashing::twox_128(b"System").to_vec();
+    let mut b = sp_crypto_hashing::twox_128(b"EventsMap").to_vec();
+    let mut map_key_hash = sp_crypto_hashing::blake2_128(&height.encode()).to_vec();
+    let mut key = height.to_le_bytes().to_vec();
+    let mut res = Vec::new();
+    res.append(&mut a);
+    res.append(&mut b);
+    res.append(&mut map_key_hash);
+    res.append(&mut key);
     res
 }
 
@@ -85,8 +91,18 @@ pub(crate) async fn get_event_bytes<T: Config>(
     backend: &dyn Backend<T>,
     block_hash: T::Hash,
 ) -> Result<Vec<u8>, Error> {
+    let number = backend
+        .block_header(block_hash)
+        .await?
+        .ok_or(Error::Unknown("Not find block header".as_bytes().to_vec()))?;
     Ok(backend
-        .storage_fetch_value(system_events_key().to_vec(), block_hash)
+        .storage_fetch_value(system_events_key(number.number().into() as u32).to_vec(), block_hash)
         .await?
         .unwrap_or_default())
+}
+
+#[test]
+fn test_event_map_key() {
+    let key = system_events_key(2974263);
+    println!("key: {:?}", hex::encode(&key));
 }
