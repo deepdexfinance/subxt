@@ -117,6 +117,7 @@ tokio-util = { workspace = true, features = ["compat"], optional = true }
 # and that compiles both for native and web.
 tokio = { workspace = true, optional = true }
 wasm-bindgen-futures = { workspace = true, optional = true }
+log = { workspace = true }
 
 [dev-dependencies]
 bitvec = { workspace = true }

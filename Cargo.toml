@@ -125,6 +125,7 @@ hex-literal = "0.4.1"
 tower = "0.4"
 hyper = "1"
 http-body = "1"
+log = "0.4.28"
 
 # Light client support:
 smoldot = { version = "0.19.3", default-features = false }

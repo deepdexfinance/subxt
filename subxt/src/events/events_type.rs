@@ -26,6 +26,13 @@ impl<T: Config> Events<T> {
         }
     }
 
+    /// Create a new [`Events`] instance from the batch given bytes.
+    pub fn decode_from_batch(event_bytes_batch: Vec<Vec<u8>>, metadata: Metadata) -> Self {
+        Self {
+            inner: CoreEvents::decode_from_batch(event_bytes_batch, metadata),
+        }
+    }
+
     /// The number of events.
     pub fn len(&self) -> u32 {
         self.inner.len()
