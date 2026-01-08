@@ -7,7 +7,7 @@ use crate::{client::OnlineClientT, error::Error, events::Events, Config};
 use derive_where::derive_where;
 use polkadot_sdk::sp_crypto_hashing;
 use std::future::Future;
-use codec::Encode;
+use codec::{Decode, Encode};
 use subxt_core::config::Header;
 
 /// A client for working with events.
@@ -67,22 +67,33 @@ where
             };
 
             let event_bytes = get_event_bytes(client.backend(), block_ref.hash()).await?;
-            Ok(Events::decode_from(event_bytes, client.metadata()))
+            Ok(Events::decode_from_batch(event_bytes, client.metadata()))
         }
     }
 }
 
 // The storage key needed to access events.
-fn system_events_key(height: u32) -> Vec<u8> {
+fn system_events_key(height: u32, thread: u8) -> Vec<u8> {
     let mut a = sp_crypto_hashing::twox_128(b"System").to_vec();
     let mut b = sp_crypto_hashing::twox_128(b"EventsMap").to_vec();
-    let mut map_key_hash = sp_crypto_hashing::blake2_128(&height.encode()).to_vec();
-    let mut key = height.to_le_bytes().to_vec();
+    let mut height_key_hash = sp_crypto_hashing::blake2_128(&height.encode()).to_vec();
+    let mut thread_key_hash = sp_crypto_hashing::blake2_128(&thread.encode()).to_vec();
     let mut res = Vec::new();
     res.append(&mut a);
     res.append(&mut b);
-    res.append(&mut map_key_hash);
-    res.append(&mut key);
+    res.append(&mut height_key_hash);
+    res.append(&mut thread_key_hash);
+    res
+}
+
+fn system_thread_key(height: u32) -> Vec<u8> {
+    let mut a = sp_crypto_hashing::twox_128(b"System").to_vec();
+    let mut b = sp_crypto_hashing::twox_128(b"Threads").to_vec();
+    let mut height_key_hash = sp_crypto_hashing::blake2_128(&height.encode()).to_vec();
+    let mut res = Vec::new();
+    res.append(&mut a);
+    res.append(&mut b);
+    res.append(&mut height_key_hash);
     res
 }
 
@@ -90,17 +101,29 @@ fn system_events_key(height: u32) -> Vec<u8> {
 pub(crate) async fn get_event_bytes<T: Config>(
     backend: &dyn Backend<T>,
     block_hash: T::Hash,
-) -> Result<Vec<u8>, Error> {
-    let number = backend
+) -> Result<Vec<Vec<u8>>, Error> {
+    let header = backend
         .block_header(block_hash)
         .await?
         .ok_or(Error::Unknown("Not find block header".as_bytes().to_vec()))?;
-    Ok(backend
-        .storage_fetch_value(system_events_key(number.number().into() as u32).to_vec(), block_hash)
-        .await?
-        .unwrap_or_default())
-}
+    let number = header.number().into() as u32;
 
+    let thread_bytes = backend
+        .storage_fetch_value(system_thread_key(number).to_vec(), block_hash)
+        .await?
+        .unwrap_or_default();
+
+    let thread = Decode::decode(&mut thread_bytes.as_slice()).unwrap_or_default();
+    let mut res = Vec::new();
+    for i in 0..=thread {
+        let bytes = backend
+            .storage_fetch_value(system_events_key(number, i).to_vec(), block_hash)
+            .await?
+            .unwrap_or_default();
+        res.push(bytes);
+    }
+    Ok(res)
+}
 #[test]
 fn test_event_map_key() {
     let key = system_events_key(2974263);

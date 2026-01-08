@@ -24,5 +24,5 @@ where
     C: OnlineClientT<T>,
 {
     let event_bytes = events_client::get_event_bytes(client.backend(), block_hash).await?;
-    Ok(Events::<T>::decode_from(event_bytes, metadata))
+    Ok(Events::<T>::decode_from_batch(event_bytes, metadata))
 }
