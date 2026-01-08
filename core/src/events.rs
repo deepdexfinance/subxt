@@ -121,6 +121,32 @@ impl<T: Config> Events<T> {
         }
     }
 
+    /// Create a new [`Events`] instance from the batch given bytes.
+    pub fn decode_from_batch(event_bytes_batch: Vec<Vec<u8>>, metadata: Metadata) -> Self {
+        let mut total_num_events = 0;
+        let mut final_start_idx = 0;
+        let mut final_event_bytes = Vec::new();
+        for (index, event_bytes) in event_bytes_batch.into_iter().enumerate() {
+            let cursor = &mut &*event_bytes;
+            let num_events = <Compact<u32>>::decode(cursor).unwrap_or(Compact(0)).0;
+            total_num_events += num_events;
+            let start_idx = event_bytes.len() - cursor.len();
+            if index == 0 {
+                final_start_idx = start_idx;
+                final_event_bytes.extend(event_bytes[..].to_vec());
+            } else {
+                final_event_bytes.extend(event_bytes[start_idx..].to_vec());
+            }
+        }
+        Self {
+            metadata,
+            event_bytes: final_event_bytes.into(),
+            start_idx: final_start_idx,
+            num_events: total_num_events,
+            marker: core::marker::PhantomData,
+        }
+    }
+
     /// The number of events.
     pub fn len(&self) -> u32 {
         self.num_events
