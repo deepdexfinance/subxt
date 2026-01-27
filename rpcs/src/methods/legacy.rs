@@ -300,6 +300,16 @@ impl<T: RpcConfig> LegacyRpcMethods<T> {
         Ok(xt_hash)
     }
 
+    /// Create and submit extrinsics and return corresponding Hash if successful
+    pub async fn author_submit_extrinsics(&self, extrinsic: &[u8]) -> Result<Vec<Result<T::Hash, String>>, Error> {
+        let params = rpc_params![to_hex(extrinsic)];
+        let res = self
+            .client
+            .request("author_submitExtrinsics", params)
+            .await?;
+        Ok(res)
+    }
+
     /// Create and submit an extrinsic and return a subscription to the events triggered.
     pub async fn author_submit_and_watch_extrinsic(
         &self,
