@@ -88,11 +88,10 @@ fn system_events_key(height: u32, thread: u8) -> Vec<u8> {
 fn system_thread_key(height: u32) -> Vec<u8> {
     let mut a = sp_crypto_hashing::twox_128(b"System").to_vec();
     let mut b = sp_crypto_hashing::twox_128(b"Threads").to_vec();
-    let mut height_key_hash = sp_crypto_hashing::blake2_128(&height.encode()).to_vec();
     let mut res = Vec::new();
     res.append(&mut a);
     res.append(&mut b);
-    res.append(&mut height_key_hash);
+    res.append(&mut height.encode());
     res
 }
 
@@ -114,6 +113,7 @@ pub(crate) async fn get_event_bytes<T: Config>(
 
 
     let thread = Decode::decode(&mut thread_bytes.as_slice()).unwrap_or_default();
+    println!("thread: {thread}");
     let mut res = Vec::new();
     for i in 0..=thread {
         let bytes = backend
