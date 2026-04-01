@@ -73,7 +73,7 @@ where
 }
 
 // The storage key needed to access events.
-fn system_events_key(height: u32, thread: u8) -> Vec<u8> {
+fn system_events_key(height: u64, thread: u8) -> Vec<u8> {
     let mut a = sp_crypto_hashing::twox_128(b"System").to_vec();
     let mut b = sp_crypto_hashing::twox_128(b"EventsMap").to_vec();
     let mut height_key_hash = sp_crypto_hashing::blake2_128(&height.encode()).to_vec();
@@ -86,7 +86,7 @@ fn system_events_key(height: u32, thread: u8) -> Vec<u8> {
     res
 }
 
-fn system_thread_key(height: u32) -> Vec<u8> {
+fn system_thread_key(height: u64) -> Vec<u8> {
     let mut a = sp_crypto_hashing::twox_128(b"System").to_vec();
     let mut b = sp_crypto_hashing::twox_128(b"Threads").to_vec();
     let mut res = Vec::new();
@@ -105,7 +105,7 @@ pub(crate) async fn get_event_bytes<T: Config>(
         .block_header(block_hash)
         .await?
         .ok_or(Error::Unknown("Not find block header".as_bytes().to_vec()))?;
-    let number = header.number().into() as u32;
+    let number = header.number().into() as u64;
 
     let thread_bytes = backend
         .storage_fetch_value(system_thread_key(number).to_vec(), block_hash)
