@@ -28,7 +28,7 @@ impl Config for SubstrateConfig {
     type Address = MultiAddress<Self::AccountId, u32>;
     type Signature = MultiSignature;
     type Hasher = BlakeTwo256;
-    type Header = SubstrateHeader<u32, BlakeTwo256>;
+    type Header = SubstrateHeader<u64, BlakeTwo256>;
     type ExtrinsicParams = SubstrateExtrinsicParams<Self>;
     type AssetId = u32;
 }
@@ -314,7 +314,7 @@ mod test {
             }
         "#;
 
-        let header: SubstrateHeader<u32, BlakeTwo256> =
+        let header: SubstrateHeader<u64, BlakeTwo256> =
             serde_json::from_str(numeric_block_number_json).expect("valid block header");
         assert_eq!(header.number(), 4);
     }
@@ -334,7 +334,7 @@ mod test {
             }
         "#;
 
-        let header: SubstrateHeader<u32, BlakeTwo256> =
+        let header: SubstrateHeader<u64, BlakeTwo256> =
             serde_json::from_str(numeric_block_number_json).expect("valid block header");
         assert_eq!(header.number(), 4);
     }

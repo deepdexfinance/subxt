@@ -610,7 +610,7 @@ mod test {
         type Address = crate::utils::MultiAddress<Self::AccountId, ()>;
         type Signature = crate::utils::MultiSignature;
         type Hasher = crate::config::substrate::BlakeTwo256;
-        type Header = crate::config::substrate::SubstrateHeader<u32, Self::Hasher>;
+        type Header = crate::config::substrate::SubstrateHeader<u64, Self::Hasher>;
         type ExtrinsicParams = DefaultExtrinsicParams<Self>;
         type AssetId = u32;
     }

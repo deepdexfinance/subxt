@@ -24,7 +24,7 @@ impl Config for CustomConfig {
     type Address = subxt::utils::MultiAddress<Self::AccountId, ()>;
     type Signature = subxt::utils::MultiSignature;
     type Hasher = subxt::config::substrate::BlakeTwo256;
-    type Header = subxt::config::substrate::SubstrateHeader<u32, Self::Hasher>;
+    type Header = subxt::config::substrate::SubstrateHeader<u64, Self::Hasher>;
     type ExtrinsicParams = signed_extensions::AnyOf<
         Self,
         (

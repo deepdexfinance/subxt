@@ -326,7 +326,7 @@ mod test {
         type Address = AccountId20;
         type Signature = Signature;
         type Hasher = substrate::BlakeTwo256;
-        type Header = substrate::SubstrateHeader<u32, substrate::BlakeTwo256>;
+        type Header = substrate::SubstrateHeader<u64, substrate::BlakeTwo256>;
         type ExtrinsicParams = SubstrateExtrinsicParams<Self>;
         type AssetId = u32;
     }
