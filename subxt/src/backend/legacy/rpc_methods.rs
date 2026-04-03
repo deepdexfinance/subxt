@@ -93,7 +93,7 @@ impl<T: Config> LegacyRpcMethods<T> {
 
     /// Fetch the genesis hash
     pub async fn genesis_hash(&self) -> Result<T::Hash, Error> {
-        let block_zero = 0u32;
+        let block_zero = 0u64;
         let params = rpc_params![block_zero];
         let genesis_hash: Option<T::Hash> =
             self.client.request("chain_getBlockHash", params).await?;
