@@ -83,6 +83,7 @@ scale-bits = { workspace = true, features = ["default"] }
 scale-decode = { workspace = true, features = ["default"] }
 scale-encode = { workspace = true, features = ["default"] }
 futures = { workspace = true }
+futures-timer = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["default", "raw_value"] }

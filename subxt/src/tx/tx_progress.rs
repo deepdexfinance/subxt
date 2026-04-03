@@ -4,18 +4,21 @@
 
 //! Types representing extrinsics/transactions that have been submitted to a node.
 
+use std::collections::VecDeque;
 use std::task::Poll;
+use std::time::Duration;
 
 use crate::{
     backend::{BlockRef, StreamOfResults, TransactionStatus as BackendTxStatus},
     client::OnlineClientT,
-    error::{DispatchError, Error, RpcError, TransactionError},
+    config::Hasher,
+    error::{DispatchError, Error, TransactionError},
     events::EventsClient,
     utils::strip_compact_prefix,
     Config,
 };
 use derive_where::derive_where;
-use futures::{Stream, StreamExt};
+use futures::{future::Either, FutureExt, Stream, StreamExt};
 
 /// This struct represents a subscription to the progress of some transaction.
 pub struct TxProgress<T: Config, C> {
@@ -64,11 +67,63 @@ where
     T: Config,
     C: OnlineClientT<T>,
 {
+    /// Upper bound on how long [`Self::wait_for_finalized`] waits before returning an error
+    /// (after trying on-chain fallback scans).
+    const WAIT_FOR_FINALIZED_TIMEOUT: Duration = Duration::from_secs(240);
+    /// How many recent finalized block hashes we remember for extrinsic fallback lookup.
+    const RECENT_FINALIZED_CAP: usize = 128;
+
     /// Return the next transaction status when it's emitted. This just delegates to the
     /// [`futures::Stream`] implementation for [`TxProgress`], but allows you to
     /// avoid importing that trait if you don't otherwise need it.
     pub async fn next(&mut self) -> Option<Result<TxStatus<T, C>, Error>> {
         StreamExt::next(self).await
+    }
+
+    async fn block_contains_extrinsic(
+        client: &C,
+        ext_hash: T::Hash,
+        block_hash: T::Hash,
+    ) -> Result<bool, Error> {
+        let Some(body) = client.backend().block_body(block_hash).await? else {
+            return Ok(false);
+        };
+        Ok(body.iter().any(|ext| {
+            let Ok((_, stripped)) = strip_compact_prefix(ext) else {
+                return false;
+            };
+            T::Hasher::hash_of(&stripped) == ext_hash
+        }))
+    }
+
+    fn push_recent_finalized(recent: &mut VecDeque<BlockRef<T::Hash>>, block_ref: BlockRef<T::Hash>) {
+        recent.push_back(block_ref);
+        while recent.len() > Self::RECENT_FINALIZED_CAP {
+            recent.pop_front();
+        }
+    }
+
+    async fn wait_finalized_timeout_fallback(
+        client: &C,
+        ext_hash: T::Hash,
+        last_in_best: Option<BlockRef<T::Hash>>,
+        recent_finalized: &VecDeque<BlockRef<T::Hash>>,
+    ) -> Result<TxInBlock<T, C>, Error> {
+        if let Some(br) = last_in_best {
+            return Ok(TxInBlock::new(br, ext_hash, client.clone()));
+        }
+        for br in recent_finalized.iter().rev() {
+            if Self::block_contains_extrinsic(client, ext_hash, br.hash()).await? {
+                return Ok(TxInBlock::new(br.clone(), ext_hash, client.clone()));
+            }
+        }
+        let br = client.backend().latest_finalized_block_ref().await?;
+        if Self::block_contains_extrinsic(client, ext_hash, br.hash()).await? {
+            return Ok(TxInBlock::new(br, ext_hash, client.clone()));
+        }
+        Err(Error::Other(
+            "Timeout waiting for the transaction to be finalized".into(),
+        ))
     }
 
     /// Wait for the transaction to be finalized, and return a [`TxInBlock`]
@@ -81,24 +136,110 @@ where
     /// probability that the transaction will not make it into a block but there is no guarantee
     /// that this is true. In those cases the stream is closed however, so you currently have no way to find
     /// out if they finally made it into a block or not.
+    ///
+    /// **Note:** on some nodes or multi-validator networks the transaction watch stream may never
+    /// deliver [`TxStatus::InFinalizedBlock`] even though the extrinsic is finalized. This method
+    /// therefore multiplexes with finalized block headers, scans recent finalized blocks for the
+    /// extrinsic hash, and enforces an overall timeout so the future does not hang indefinitely.
     pub async fn wait_for_finalized(mut self) -> Result<TxInBlock<T, C>, Error> {
-        while let Some(status) = self.next().await {
-            match status? {
-                // Finalized! Return.
-                TxStatus::InFinalizedBlock(s) => return Ok(s),
-                // Error scenarios; return the error.
-                TxStatus::Error { message } => return Err(TransactionError::Error(message).into()),
-                TxStatus::Invalid { message } => {
-                    return Err(TransactionError::Invalid(message).into())
+        let ext_hash = self.ext_hash;
+        let client = self.client.clone();
+        let deadline = instant::Instant::now() + Self::WAIT_FOR_FINALIZED_TIMEOUT;
+        let mut last_in_best: Option<BlockRef<T::Hash>> = None;
+        let mut recent_finalized: VecDeque<BlockRef<T::Hash>> = VecDeque::new();
+        let mut fin_sub = match client.backend().stream_finalized_block_headers().await {
+            Ok(s) => Some(s),
+            Err(_) => None,
+        };
+
+        loop {
+            if instant::Instant::now() >= deadline {
+                return Self::wait_finalized_timeout_fallback(
+                    &client,
+                    ext_hash,
+                    last_in_best,
+                    &recent_finalized,
+                )
+                .await;
+            }
+
+            let remaining = deadline.saturating_duration_since(instant::Instant::now());
+            let tick = Duration::from_secs(1).min(remaining);
+
+            let tx_next = self.next().boxed();
+            let timer = futures_timer::Delay::new(tick).boxed();
+
+            match futures::future::select(tx_next, timer).await {
+                Either::Left((tx_status, _)) => match tx_status {
+                    None => {
+                        return Self::wait_finalized_timeout_fallback(
+                            &client,
+                            ext_hash,
+                            last_in_best,
+                            &recent_finalized,
+                        )
+                        .await;
+                    }
+                    Some(Err(e)) => return Err(e),
+                    Some(Ok(status)) => match status {
+                        TxStatus::InFinalizedBlock(s) => return Ok(s),
+                        TxStatus::InBestBlock(s) => {
+                            last_in_best = Some(BlockRef::from_hash(s.block_hash()));
+                        }
+                        TxStatus::Error { message } => {
+                            return Err(TransactionError::Error(message).into());
+                        }
+                        TxStatus::Invalid { message } => {
+                            return Err(TransactionError::Invalid(message).into());
+                        }
+                        TxStatus::Dropped { message } => {
+                            return Err(TransactionError::Dropped(message).into());
+                        }
+                        _ => {}
+                    },
+                },
+                Either::Right((_, _)) => {
+                    // Timer tick: pull any ready finalized headers and scan bodies (watch stream can stall).
+                    if let Some(ref mut fin) = fin_sub {
+                        let drain_until = instant::Instant::now() + Duration::from_millis(100);
+                        while instant::Instant::now() < drain_until {
+                            let nf = fin.next().boxed();
+                            let z = futures_timer::Delay::new(Duration::from_millis(2)).boxed();
+                            match futures::future::select(nf, z).await {
+                                Either::Left((fin_out, _)) => {
+                                    if let Some(hdr_res) = fin_out {
+                                        let (_header, block_ref) = hdr_res?;
+                                        Self::push_recent_finalized(
+                                            &mut recent_finalized,
+                                            block_ref.clone(),
+                                        );
+                                        if Self::block_contains_extrinsic(
+                                            &client,
+                                            ext_hash,
+                                            block_ref.hash(),
+                                        )
+                                        .await?
+                                        {
+                                            return Ok(TxInBlock::new(
+                                                block_ref,
+                                                ext_hash,
+                                                client.clone(),
+                                            ));
+                                        }
+                                    }
+                                }
+                                Either::Right((_, _)) => break,
+                            }
+                        }
+                    }
+                    for br in recent_finalized.iter().rev() {
+                        if Self::block_contains_extrinsic(&client, ext_hash, br.hash()).await? {
+                            return Ok(TxInBlock::new(br.clone(), ext_hash, client.clone()));
+                        }
+                    }
                 }
-                TxStatus::Dropped { message } => {
-                    return Err(TransactionError::Dropped(message).into())
-                }
-                // Ignore and wait for next status event:
-                _ => continue,
             }
         }
-        Err(RpcError::SubscriptionDropped.into())
     }
 
     /// Wait for the transaction to be finalized, and for the transaction events to indicate
@@ -322,15 +463,141 @@ mod test {
     use subxt_core::client::RuntimeVersion;
 
     use crate::{
-        backend::{StreamOfResults, TransactionStatus},
+        backend::{
+            sealed::Sealed, Backend, BlockRef, StreamOf, StreamOfResults, StorageResponse,
+            TransactionStatus,
+        },
         client::{OfflineClientT, OnlineClientT},
         tx::TxProgress,
         Config, Error, SubstrateConfig,
     };
+    use async_trait::async_trait;
+    use futures::stream;
 
     type MockTxProgress = TxProgress<SubstrateConfig, MockClient>;
     type MockHash = <SubstrateConfig as Config>::Hash;
     type MockSubstrateTxStatus = TransactionStatus<MockHash>;
+
+    #[derive(Debug)]
+    struct UnitTestStubBackend;
+
+    impl Sealed for UnitTestStubBackend {}
+
+    fn empty_stream<T: Send + 'static>() -> StreamOfResults<T> {
+        StreamOf::new(Box::pin(stream::empty()))
+    }
+
+    #[async_trait]
+    impl Backend<SubstrateConfig> for UnitTestStubBackend {
+        async fn storage_fetch_values(
+            &self,
+            _keys: Vec<Vec<u8>>,
+            _at: MockHash,
+        ) -> Result<StreamOfResults<StorageResponse>, Error> {
+            Ok(empty_stream())
+        }
+
+        async fn storage_fetch_descendant_keys(
+            &self,
+            _key: Vec<u8>,
+            _at: MockHash,
+        ) -> Result<StreamOfResults<Vec<u8>>, Error> {
+            Ok(empty_stream())
+        }
+
+        async fn storage_fetch_descendant_values(
+            &self,
+            _key: Vec<u8>,
+            _at: MockHash,
+        ) -> Result<StreamOfResults<StorageResponse>, Error> {
+            Ok(empty_stream())
+        }
+
+        async fn genesis_hash(&self) -> Result<MockHash, Error> {
+            Err(Error::Other("unit test stub backend".into()))
+        }
+
+        async fn block_header(
+            &self,
+            _at: MockHash,
+        ) -> Result<Option<<SubstrateConfig as Config>::Header>, Error> {
+            Ok(None)
+        }
+
+        async fn block_body(&self, _at: MockHash) -> Result<Option<Vec<Vec<u8>>>, Error> {
+            Ok(None)
+        }
+
+        async fn latest_finalized_block_ref(&self) -> Result<BlockRef<MockHash>, Error> {
+            Err(Error::Other("unit test stub backend".into()))
+        }
+
+        async fn current_runtime_version(
+            &self,
+        ) -> Result<subxt_core::client::RuntimeVersion, Error> {
+            Err(Error::Other("unit test stub backend".into()))
+        }
+
+        async fn stream_runtime_version(
+            &self,
+        ) -> Result<StreamOfResults<subxt_core::client::RuntimeVersion>, Error> {
+            Ok(empty_stream())
+        }
+
+        async fn stream_all_block_headers(
+            &self,
+        ) -> Result<
+            StreamOfResults<(
+                <SubstrateConfig as Config>::Header,
+                BlockRef<MockHash>,
+            )>,
+            Error,
+        > {
+            Ok(empty_stream())
+        }
+
+        async fn stream_best_block_headers(
+            &self,
+        ) -> Result<
+            StreamOfResults<(
+                <SubstrateConfig as Config>::Header,
+                BlockRef<MockHash>,
+            )>,
+            Error,
+        > {
+            Ok(empty_stream())
+        }
+
+        async fn stream_finalized_block_headers(
+            &self,
+        ) -> Result<
+            StreamOfResults<(
+                <SubstrateConfig as Config>::Header,
+                BlockRef<MockHash>,
+            )>,
+            Error,
+        > {
+            Ok(empty_stream())
+        }
+
+        async fn submit_transaction(
+            &self,
+            _bytes: &[u8],
+        ) -> Result<StreamOfResults<TransactionStatus<MockHash>>, Error> {
+            Ok(empty_stream())
+        }
+
+        async fn call(
+            &self,
+            _method: &str,
+            _call_parameters: Option<&[u8]>,
+            _at: MockHash,
+        ) -> Result<Vec<u8>, Error> {
+            Err(Error::Other("unit test stub backend".into()))
+        }
+    }
+
+    static STUB_BACKEND: UnitTestStubBackend = UnitTestStubBackend;
 
     /// a mock client to satisfy trait bounds in tests
     #[derive(Clone, Debug)]
@@ -356,7 +623,7 @@ mod test {
 
     impl OnlineClientT<SubstrateConfig> for MockClient {
         fn backend(&self) -> &dyn crate::backend::Backend<SubstrateConfig> {
-            unimplemented!("just a mock impl to satisfy trait bounds")
+            &STUB_BACKEND
         }
     }
 
