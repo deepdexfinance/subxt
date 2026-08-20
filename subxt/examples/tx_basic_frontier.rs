@@ -20,7 +20,7 @@ impl subxt::Config for EthRuntimeConfig {
     type Signature = Signature;
     type Hasher = subxt::config::substrate::BlakeTwo256;
     type Header =
-        subxt::config::substrate::SubstrateHeader<u32, subxt::config::substrate::BlakeTwo256>;
+        subxt::config::substrate::SubstrateHeader<u64, subxt::config::substrate::BlakeTwo256>;
     type ExtrinsicParams = subxt::config::SubstrateExtrinsicParams<Self>;
     type AssetId = u32;
 }
