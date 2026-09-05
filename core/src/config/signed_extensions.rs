@@ -290,6 +290,80 @@ impl<T: Config> SignedExtension<T> for CheckMortality<T> {
     }
 }
 
+/// A transaction lifetime independent of historical block hashes.
+#[derive(Clone, Debug, Encode, DecodeAsType)]
+pub enum NonceEra {
+    /// No expiry. This remains variant zero and encodes as the legacy immortal `Era` byte.
+    Immortal,
+    /// First block number at which the transaction is no longer valid.
+    Mortal(u64),
+}
+
+/// The `CheckNonceEra` signed extension.
+pub struct CheckNonceEra<T: Config> {
+    era: NonceEra,
+    genesis_hash: T::Hash,
+}
+
+/// Parameters to configure [`CheckNonceEra`].
+pub struct CheckNonceEraParams(Option<NonceEra>);
+
+impl Default for CheckNonceEraParams {
+    fn default() -> Self {
+        Self(None)
+    }
+}
+
+impl<T: Config> RefineParams<T> for CheckNonceEraParams {
+    fn refine(&mut self, data: &RefineParamsData<T>) {
+        if self.0.is_none() {
+            const TX_VALID_FOR: u64 = 32;
+            *self = Self::mortal(data.block_number().saturating_add(TX_VALID_FOR));
+        }
+    }
+}
+
+impl CheckNonceEraParams {
+    /// Configure a transaction with an absolute exclusive block deadline.
+    pub fn mortal(valid_until: u64) -> Self {
+        Self(Some(NonceEra::Mortal(valid_until)))
+    }
+
+    /// Configure an immortal transaction.
+    pub fn immortal() -> Self {
+        Self(Some(NonceEra::Immortal))
+    }
+}
+
+impl<T: Config> ExtrinsicParams<T> for CheckNonceEra<T> {
+    type Params = CheckNonceEraParams;
+
+    fn new(client: &ClientState<T>, params: Self::Params) -> Result<Self, ExtrinsicParamsError> {
+        Ok(Self {
+            era: params.0.unwrap_or(NonceEra::Immortal),
+            genesis_hash: client.genesis_hash,
+        })
+    }
+}
+
+impl<T: Config> ExtrinsicParamsEncoder for CheckNonceEra<T> {
+    fn encode_extra_to(&self, v: &mut Vec<u8>) {
+        self.era.encode_to(v);
+    }
+
+    fn encode_additional_to(&self, v: &mut Vec<u8>) {
+        self.genesis_hash.encode_to(v);
+    }
+}
+
+impl<T: Config> SignedExtension<T> for CheckNonceEra<T> {
+    type Decoded = NonceEra;
+
+    fn matches(identifier: &str, _type_id: u32, _types: &PortableRegistry) -> bool {
+        identifier == "CheckNonceEra"
+    }
+}
+
 /// The [`ChargeAssetTxPayment`] signed extension.
 #[derive(DecodeAsType)]
 #[derive_where(Clone, Debug; T::AssetId)]
@@ -560,5 +634,18 @@ fn is_type_empty(type_id: u32, types: &scale_info::PortableRegistry) -> bool {
         | TypeDef::Sequence(_)
         | TypeDef::Compact(_)
         | TypeDef::Primitive(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NonceEra;
+    use crate::utils::Era;
+    use codec::Encode;
+
+    #[test]
+    fn nonce_era_encoding_is_stable() {
+        assert_eq!(NonceEra::Immortal.encode(), Era::Immortal.encode());
+        assert_eq!(NonceEra::Mortal(42).encode(), [vec![1], 42u64.encode()].concat());
     }
 }

@@ -16,6 +16,7 @@ pub type DefaultExtrinsicParams<T> = signed_extensions::AnyOf<
         signed_extensions::CheckNonce,
         signed_extensions::CheckGenesis<T>,
         signed_extensions::CheckMortality<T>,
+        signed_extensions::CheckNonceEra<T>,
         signed_extensions::ChargeAssetTxPayment<T>,
         signed_extensions::ChargeTransactionPayment,
         signed_extensions::CheckMetadataHash,
@@ -66,8 +67,12 @@ impl<T: Config> DefaultExtrinsicParamsBuilder<T> {
     }
 
     /// Make the transaction mortal, given a block header that it should be mortal from,
-    /// and the number of blocks (roughly; it'll be rounded to a power of two) that it will
-    /// be mortal for.
+    /// and the number of blocks that it will be mortal for.
+    ///
+    /// A runtime using `CheckMortality` rounds the period to the representation supported by
+    /// `Era` and anchors the transaction to the header hash. A runtime using `CheckNonceEra`
+    /// uses `header.number() + for_n_blocks` as an exact, exclusive deadline and does not include
+    /// the header hash in the signed payload.
     pub fn mortal(mut self, from_block: &T::Header, for_n_blocks: u64) -> Self {
         self.mortality = Some(Mortality {
             checkpoint_hash: from_block.hash(),
@@ -84,8 +89,11 @@ impl<T: Config> DefaultExtrinsicParamsBuilder<T> {
     }
 
     /// Make the transaction mortal, given a block number and block hash (which must both point to
-    /// the same block) that it should be mortal from, and the number of blocks (roughly; it'll be
-    /// rounded to a power of two) that it will be mortal for.
+    /// the same block) that it should be mortal from, and the number of blocks that it will be
+    /// mortal for.
+    ///
+    /// The hash is used by `CheckMortality`. It is ignored by `CheckNonceEra`, which uses the
+    /// block number plus the requested period as its exact, exclusive deadline.
     ///
     /// Prefer to use [`DefaultExtrinsicParamsBuilder::mortal()`], which ensures that the block hash
     /// and number align.
@@ -123,14 +131,21 @@ impl<T: Config> DefaultExtrinsicParamsBuilder<T> {
 
     /// Build the extrinsic parameters.
     pub fn build(self) -> <DefaultExtrinsicParams<T> as ExtrinsicParams<T>>::Params {
-        let check_mortality_params = if let Some(mortality) = self.mortality {
+        let check_mortality_params = if let Some(mortality) = self.mortality.as_ref() {
             signed_extensions::CheckMortalityParams::mortal(
                 mortality.period,
                 mortality.checkpoint_number,
-                mortality.checkpoint_hash,
+                mortality.checkpoint_hash.clone(),
             )
         } else {
             signed_extensions::CheckMortalityParams::immortal()
+        };
+        let check_nonce_era_params = if let Some(mortality) = self.mortality {
+            signed_extensions::CheckNonceEraParams::mortal(
+                mortality.checkpoint_number.saturating_add(mortality.period),
+            )
+        } else {
+            signed_extensions::CheckNonceEraParams::immortal()
         };
 
         let charge_asset_tx_params = if let Some(asset_id) = self.tip_of_asset_id {
@@ -150,6 +165,7 @@ impl<T: Config> DefaultExtrinsicParamsBuilder<T> {
             check_nonce_params,
             (),
             check_mortality_params,
+            check_nonce_era_params,
             charge_asset_tx_params,
             charge_transaction_params,
             (),
