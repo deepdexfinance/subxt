@@ -18,6 +18,7 @@ pub type DefaultExtrinsicParams<T> = transaction_extensions::AnyOf<
         transaction_extensions::CheckNonce,
         transaction_extensions::CheckGenesis<T>,
         transaction_extensions::CheckMortality<T>,
+        transaction_extensions::CheckNonceEra<T>,
         transaction_extensions::ChargeAssetTxPayment<T>,
         transaction_extensions::ChargeTransactionPayment,
         transaction_extensions::CheckMetadataHash,
@@ -30,6 +31,7 @@ pub type DefaultExtrinsicParams<T> = transaction_extensions::AnyOf<
 pub struct DefaultExtrinsicParamsBuilder<T: Config> {
     /// `None` means the tx will be immortal, else it's mortality is described.
     mortality: transaction_extensions::CheckMortalityParams<T>,
+    nonce_era: transaction_extensions::CheckNonceEraParams,
     /// `None` means the nonce will be automatically set.
     nonce: Option<u64>,
     /// `None` means we'll use the native token.
@@ -42,6 +44,7 @@ impl<T: Config> Default for DefaultExtrinsicParamsBuilder<T> {
     fn default() -> Self {
         Self {
             mortality: CheckMortalityParams::default(),
+            nonce_era: transaction_extensions::CheckNonceEraParams::default(),
             tip: 0,
             tip_of: 0,
             tip_of_asset_id: None,
@@ -61,6 +64,7 @@ impl<T: Config> DefaultExtrinsicParamsBuilder<T> {
     /// theory, be pending for a long time and only be included many blocks into the future.
     pub fn immortal(mut self) -> Self {
         self.mortality = transaction_extensions::CheckMortalityParams::immortal();
+        self.nonce_era = transaction_extensions::CheckNonceEraParams::immortal();
         self
     }
 
@@ -77,6 +81,8 @@ impl<T: Config> DefaultExtrinsicParamsBuilder<T> {
     /// in order to obtain.
     pub fn mortal(mut self, for_n_blocks: u64) -> Self {
         self.mortality = transaction_extensions::CheckMortalityParams::mortal(for_n_blocks);
+        self.nonce_era =
+            transaction_extensions::CheckNonceEraParams::mortal_for_blocks(for_n_blocks);
         self
     }
 
@@ -93,6 +99,10 @@ impl<T: Config> DefaultExtrinsicParamsBuilder<T> {
             for_n_blocks,
             from_block_n,
             from_block_hash,
+        );
+        self.nonce_era = transaction_extensions::CheckNonceEraParams::mortal_from_unchecked(
+            for_n_blocks,
+            from_block_n,
         );
         self
     }
@@ -147,6 +157,7 @@ impl<T: Config> DefaultExtrinsicParamsBuilder<T> {
             check_nonce_params,
             (),
             check_mortality_params,
+            self.nonce_era,
             charge_asset_tx_params,
             charge_transaction_params,
             (),

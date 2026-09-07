@@ -423,6 +423,116 @@ impl<T: Config> Params<T> for CheckMortalityParams<T> {
     }
 }
 
+/// A transaction lifetime independent of historical block hashes.
+#[derive(Clone, Debug, Encode, DecodeAsType)]
+pub enum NonceEra {
+    /// No expiry. This remains variant zero and encodes as the legacy immortal `Era` byte.
+    Immortal,
+    /// First block number at which the transaction is no longer valid.
+    Mortal(u64),
+}
+
+/// The [`CheckNonceEra`] transaction extension.
+pub struct CheckNonceEra<T: Config> {
+    era: NonceEra,
+    genesis_hash: HashFor<T>,
+}
+
+impl<T: Config> ExtrinsicParams<T> for CheckNonceEra<T> {
+    type Params = CheckNonceEraParams;
+
+    fn new(client: &ClientState<T>, params: Self::Params) -> Result<Self, ExtrinsicParamsError> {
+        if matches!(params.0, CheckNonceEraParamsInner::MortalForBlocks(_)) {
+            return Err(ExtrinsicParamsError::custom(
+                "CheckNonceEra: We cannot construct an offline extrinsic with only the number of blocks it is mortal for. Use mortal_from_unchecked instead.",
+            ));
+        }
+
+        let era = match params.0 {
+            CheckNonceEraParamsInner::MortalUntil(valid_until) => NonceEra::Mortal(valid_until),
+            CheckNonceEraParamsInner::Immortal
+            | CheckNonceEraParamsInner::MortalForBlocksOrImmortalIfNotPossible(_) => {
+                NonceEra::Immortal
+            }
+            CheckNonceEraParamsInner::MortalForBlocks(_) => unreachable!(),
+        };
+
+        Ok(Self {
+            era,
+            genesis_hash: client.genesis_hash,
+        })
+    }
+}
+
+impl<T: Config> ExtrinsicParamsEncoder for CheckNonceEra<T> {
+    fn encode_value_to(&self, v: &mut Vec<u8>) {
+        self.era.encode_to(v);
+    }
+
+    fn encode_implicit_to(&self, v: &mut Vec<u8>) {
+        self.genesis_hash.encode_to(v);
+    }
+}
+
+impl<T: Config> TransactionExtension<T> for CheckNonceEra<T> {
+    type Decoded = NonceEra;
+
+    fn matches(identifier: &str, _type_id: u32, _types: &PortableRegistry) -> bool {
+        identifier == "CheckNonceEra"
+    }
+}
+
+/// Parameters to configure the [`CheckNonceEra`] transaction extension.
+pub struct CheckNonceEraParams(CheckNonceEraParamsInner);
+
+enum CheckNonceEraParamsInner {
+    Immortal,
+    MortalForBlocks(u64),
+    MortalForBlocksOrImmortalIfNotPossible(u64),
+    MortalUntil(u64),
+}
+
+impl Default for CheckNonceEraParams {
+    fn default() -> Self {
+        Self(CheckNonceEraParamsInner::MortalForBlocksOrImmortalIfNotPossible(32))
+    }
+}
+
+impl CheckNonceEraParams {
+    /// Configure a transaction with an absolute exclusive block deadline.
+    pub fn mortal(valid_until: u64) -> Self {
+        Self(CheckNonceEraParamsInner::MortalUntil(valid_until))
+    }
+
+    pub(crate) fn mortal_for_blocks(for_n_blocks: u64) -> Self {
+        Self(CheckNonceEraParamsInner::MortalForBlocks(for_n_blocks))
+    }
+
+    /// Configure a mortal transaction using explicit block details.
+    pub fn mortal_from_unchecked(for_n_blocks: u64, from_block_n: u64) -> Self {
+        Self(CheckNonceEraParamsInner::MortalUntil(
+            from_block_n.saturating_add(for_n_blocks),
+        ))
+    }
+
+    /// Configure an immortal transaction.
+    pub fn immortal() -> Self {
+        Self(CheckNonceEraParamsInner::Immortal)
+    }
+}
+
+impl<T: Config> Params<T> for CheckNonceEraParams {
+    fn inject_block(&mut self, from_block_n: u64, _from_block_hash: HashFor<T>) {
+        match self.0 {
+            CheckNonceEraParamsInner::MortalForBlocks(n)
+            | CheckNonceEraParamsInner::MortalForBlocksOrImmortalIfNotPossible(n) => {
+                self.0 = CheckNonceEraParamsInner::MortalUntil(from_block_n.saturating_add(n));
+            }
+            CheckNonceEraParamsInner::Immortal | CheckNonceEraParamsInner::MortalUntil(_) => {}
+        }
+    }
+}
+
 /// The [`ChargeAssetTxPayment`] transaction extension.
 #[derive(DecodeAsType)]
 #[derive_where(Clone, Debug; T::AssetId)]
@@ -703,5 +813,18 @@ fn is_type_empty(type_id: u32, types: &scale_info::PortableRegistry) -> bool {
         | TypeDef::Sequence(_)
         | TypeDef::Compact(_)
         | TypeDef::Primitive(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NonceEra;
+    use crate::utils::Era;
+    use codec::Encode;
+
+    #[test]
+    fn nonce_era_encoding_is_stable() {
+        assert_eq!(NonceEra::Immortal.encode(), Era::Immortal.encode());
+        assert_eq!(NonceEra::Mortal(42).encode(), [vec![1], 42u64.encode()].concat());
     }
 }
